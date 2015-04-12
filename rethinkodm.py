@@ -32,6 +32,30 @@ def drop_db(conn, dbname):
     if dbname in r.db_list().run(conn):
         r.db_drop(dbname).run(conn)
 
+def delete_obj(conn, obj):
+    """ method to delete an object from the DB and all pointers to it from
+        related objects that contain it's ID that this object doesn't
+        directly know about
+    """
+    # loop through classes that have us, based on our tuple in __init__
+    # that specifies a relation
+    for relation in obj.get_related_classes():
+        #loop through actual related objects removing ourselves
+        #returns an empty list of no relation yet exists
+        for related in obj._hasmanyme(relation):
+            #remove ourselves from the object's list
+            getattr(related, relation[1]).remove(obj)
+            #update that object in the DB
+            related.update()
+    # done removing ourselves from our related items in the DB
+    # so now delete ourselves from the DB
+    retobj = type(obj).tbl.get(obj.id).delete().run(conn)
+    if 'deleted' in  and retobj['deleted'] == 1:
+        return True
+    else:
+        return False
+    
+
 #shared functions
 def maketimestring(anytime=None):
     """
@@ -87,7 +111,7 @@ def getRethinkMeta( dbname=None,
 
 def getRethinkBase(RethinkMeta=None, get_conn=None):
     """ a function to return the base class that will be inherited """
-    class RethinkBase(object):
+    class RethinkBase:
         """
             DB connection base class class
             Defines a few helper and an initialize function
@@ -101,6 +125,21 @@ def getRethinkBase(RethinkMeta=None, get_conn=None):
             with get_conn() as conn:
                 if self.tablename not in self.ocb.table_list().run(conn):
                     self.ocb.table_create(self.tablename).run(conn)
+
+        #this lets us find an object in a list of related objects
+        #which lets us say, run obj.related.remove(relatedobject)
+        #needed for implementing deletes
+        def __eq__(self, other):
+            return self.id == other
+
+        def get_related_classes(self):
+            """ generator method that loops through our
+                relation tuples that we have set up in __init__ """
+            with get_conn() as conn:
+                for k, v in obj.__dict__.iteritems():
+                    if isinstance(v, tuple):
+                        if v[0] in registry:
+                            yield v
 
         @property
         def dumpobject(self):
@@ -274,6 +313,7 @@ def getRethinkBase(RethinkMeta=None, get_conn=None):
                 return self.tbl.get(self.id).run(conn)
 
         def save(self):
+            """ saves the current object to the DB if it's not there """
             updatedict = {}
             for k, v in self.__dict__.items():
                 if isinstance(v, RelatedItems):
@@ -285,14 +325,22 @@ def getRethinkBase(RethinkMeta=None, get_conn=None):
             return self
 
         def update(self):
+            """ updates the DB with the current object """
             updatedict = {}
             for k, v in self.__dict__.items():
                 if isinstance(v, RelatedItems):
-                    updatedict[k] = [unicode(i.id) for i in v]
+                    updatedict[k] = [unicode(i.id) for i in v
+                                     if i is not None]
                 else:
                     updatedict[k] = v
             with get_conn() as conn:
                 self.tbl.replace(updatedict).run(conn)
+
+        def refresh(self):
+            with get_conn() as conn:
+                self=type(self).get(self.id)
+            return self
+
     return RethinkBase
 
 
