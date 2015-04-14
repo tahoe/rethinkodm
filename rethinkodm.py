@@ -140,24 +140,6 @@ def getRethinkBase(RethinkMeta=None, get_conn=None):
         def __eq__(self, other):
             return self.id == other
 
-        def get_related_classes(self):
-            """ generator method that loops through our
-                relation tuples that we have set up in __init__ """
-            with get_conn() as conn:
-                for k, v in obj.__dict__.iteritems():
-                    if isinstance(v, tuple):
-                        if v[0] in registry:
-                            yield v
-
-        def dumpobject(self):
-            kwargs = {}
-            for k, v in self.__dict__.items():
-                if isinstance(v, RelatedItems):
-                    kwargs[k] = [unicode(i.id) for i in v]
-                else:
-                    kwargs[k] = v
-            return kwargs
-
         @classmethod
         def get(cls, id=None):
             """
@@ -315,12 +297,29 @@ def getRethinkBase(RethinkMeta=None, get_conn=None):
             else:
                 return [] #no return, empty list, means no relation
 
+        def get_related_classes(self):
+            """ generator method that loops through our
+                relation tuples that we have set up in __init__ """
+            with get_conn() as conn:
+                for k, v in self.__dict__.iteritems():
+                    if isinstance(v, tuple):
+                        if v[0] in registry:
+                            yield v
+
+        def dumpobject(self):
+            kwargs = {}
+            for k, v in self.__dict__.items():
+                if isinstance(v, RelatedItems):
+                    kwargs[k] = [unicode(i.id) for i in v]
+                else:
+                    kwargs[k] = v
+            return kwargs
+
         #dump a tree of relations and ourselves
         def dumprelated(self, parents=[]):
             if self.__class__.__name__ in parents:
                 return
             parents.append(self.__class__.__name__)
-            print parents
             data = self.dumpobject()
             with get_conn() as conn:
                 for k, v in data.items():
@@ -328,14 +327,15 @@ def getRethinkBase(RethinkMeta=None, get_conn=None):
                                 and len(v) > 0
                                 and valid_v4_uuid(v[0])):
                         #get list of objects based on key
-                        data[k] = []
-                        for item in getattr(self, k):
-                            if k.__class__.__name__ not in parents:
-                                related = item.dumprelated(parents)
+                        if k.__class__.__name__ not in parents:
+                            data[k] = []
+                            reltype = getattr(self, k)
+                            print type(reltype[0]), len(reltype)
+                            for item in reltype:
+                                nextparents = deepcopy(parents)
+                                related = item.dumprelated(nextparents)
                                 if related:
                                     data[k].append(related)
-                            else:
-                                print type, 'allready in parents'
                     elif (isinstance(v, tuple)):
                         data[k] = []
                         for item in self._hasmanyme(getattr(self, k)):
@@ -343,8 +343,6 @@ def getRethinkBase(RethinkMeta=None, get_conn=None):
                                 related = item.dumprelated(parents)
                                 if related:
                                     data[k].append(related)
-                            else:
-                                print type, 'tuple allready in parents'
                 return data
                     
         @property
