@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from iso8601 import parse_date
 from collections import MutableSequence
-from uuid import uuid4
+from uuid import uuid4, UUID
 from copy import deepcopy
 import rethinkdb as r
 import json
@@ -32,6 +32,14 @@ def drop_db(conn, dbname):
     if dbname in r.db_list().run(conn):
         r.db_drop(dbname).run(conn)
 
+def valid_v4_uuid(code):
+    try:
+        UUID(code, version=4)
+    except Exception:
+        return False
+    return True
+    
+
 def delete_obj(conn, obj):
     """ method to delete an object from the DB and all pointers to it from
         related objects that contain it's ID that this object doesn't
@@ -50,7 +58,7 @@ def delete_obj(conn, obj):
     # done removing ourselves from our related items in the DB
     # so now delete ourselves from the DB
     retobj = type(obj).tbl.get(obj.id).delete().run(conn)
-    if 'deleted' in  and retobj['deleted'] == 1:
+    if 'deleted' in retobj and retobj['deleted'] == 1:
         return True
     else:
         return False
@@ -141,7 +149,6 @@ def getRethinkBase(RethinkMeta=None, get_conn=None):
                         if v[0] in registry:
                             yield v
 
-        @property
         def dumpobject(self):
             kwargs = {}
             for k, v in self.__dict__.items():
@@ -193,6 +200,11 @@ def getRethinkBase(RethinkMeta=None, get_conn=None):
                     raise InstantiateDictError('%s faild to build' % (
                                                 cls.__name__))
             return resultlist
+
+        @classmethod
+        def all(cls):
+            with get_conn() as conn:
+                return cls.tbl.run(conn)
 
         #relationship building methods
         def _ihaveone(self, objtype, attr, value):
@@ -303,9 +315,41 @@ def getRethinkBase(RethinkMeta=None, get_conn=None):
             else:
                 return [] #no return, empty list, means no relation
 
+        #dump a tree of relations and ourselves
+        def dumprelated(self, parents=[]):
+            if self.__class__.__name__ in parents:
+                return
+            parents.append(self.__class__.__name__)
+            print parents
+            data = self.dumpobject()
+            with get_conn() as conn:
+                for k, v in data.items():
+                    if (isinstance(v, list)
+                                and len(v) > 0
+                                and valid_v4_uuid(v[0])):
+                        #get list of objects based on key
+                        data[k] = []
+                        for item in getattr(self, k):
+                            if k.__class__.__name__ not in parents:
+                                related = item.dumprelated(parents)
+                                if related:
+                                    data[k].append(related)
+                            else:
+                                print type, 'allready in parents'
+                    elif (isinstance(v, tuple)):
+                        data[k] = []
+                        for item in self._hasmanyme(getattr(self, k)):
+                            if item.__class__.__name__ not in parents:
+                                related = item.dumprelated(parents)
+                                if related:
+                                    data[k].append(related)
+                            else:
+                                print type, 'tuple allready in parents'
+                return data
+                    
         @property
         def tojson(self):
-            return json.dumps(self.dumpobject)
+            return json.dumps(self.dumpobject())
 
         @property
         def fromdb(self):
@@ -373,7 +417,7 @@ class RelatedItems(MutableSequence):
     """
     def __init__(self, cls, alist):
         self._list = alist
-        self._cls = cls
+        self._cls = registry[cls]
 
     def __delitem__(self, index):
         del self._list[index]
